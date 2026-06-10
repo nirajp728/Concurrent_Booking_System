@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # 1. Database Layer
+  postgres-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cinema_db
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    restart: always
+
+  # 2. Cache & Lock Manager Layer
+  redis-cache:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: always
+
+  # 3. Application API Layer
+  backend-server:
+    image: ${DOCKERHUB_USERNAME}/cinema-backend:latest
+    environment:
+      # Database Connections
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-db:5432/cinema_db
+      SPRING_DATASOURCE_USERNAME: ${DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      
+      # Redis Connection
+      SPRING_DATA_REDIS_HOST: redis-cache
+      
+      # Dynamic CORS Security
+      CORS_ALLOWED_ORIGINS: ${FRONTEND_URL}
+      
+      # AWS SQS Messaging Credentials
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres-db
+      - redis-cache
+    restart: always

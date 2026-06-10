@@ -1,0 +1,170 @@
+Copy and paste the markdown block below directly into your new LLM session. It is compressed and optimized for AI context injection so that the next model will instantly understand your tech stack, architecture, exact file states, and configuration checkpoints without needing a long back-and-forth history.
+
+---
+
+```markdown
+# AI Context Checkpoint: Concurrent Seat Booking Engine
+
+## System Context & Stack
+- **Project Type**: Full-Stack Real-Time Seat Booking Simulator with Distributed Locking
+- **Environment**: Local Multi-Device Network Testing (Host IP: `192.168.0.239`)
+- **Backend**: Spring Boot 3.2.5, Java 25 (JDK 25.0.2), Maven
+- **Frontend**: React (Vite) + Tailwind CSS + Lucide React (Launched with `npm run dev -- --host`)
+- **Distributed Cache/Lock Manager**: Redis (Native Windows, Port `6379`)
+- **Relational Database**: PostgreSQL (Database Name: `cinema_db`, Port `5432`)
+
+## Current Verified Project Checkpoint
+1. **Lombok & Java 25 Compatibility**: Fixed compiler/annotation processor crash by forcing Lombok version `1.18.44` in `pom.xml` to support Java 25 internal compiler mechanics.
+2. **Postgres Connection**: `cinema_db` initialized successfully in pgAdmin. Relational schema drops and updates successfully automatically.
+3. **Multi-Device Wi-Fi Setup**: Cross-device testing is working between two laptops on the local subnet. 
+4. **CORS Configuration**: Explicitly whitelisted `http://192.168.0.239:5173` and `http://localhost:5173` in `WebConfig.java`.
+5. **Frontend API Pathing**: Updated `App.jsx` to route directly via `const API_BASE_URL = "http://192.168.0.239:8080"`.
+6. **Frontend Polling Optimization**: Shortened React polling interval loop from `2000ms` down to `500ms` to reduce cross-device visual sync latency.
+
+## Architectural & Concurrency Core Logic
+- **Locking Pattern**: Exclusive Distributed Pessimistic Locking via Redis. 
+- **Mechanism**: Gateway controls concurrency via the single-threaded atomic command `SET key payload EX 120 NX` (`setIfAbsent`). Guarantees mutual exclusion before relational DB overhead. Locks automatically expire after 120s to resolve zombie leases.
+- **Database Isolation Level**: PostgreSQL works at its default `Read Committed` using Multi-Version Concurrency Control (MVCC). Safe from race conditions and write-skew because the upstream Redis lock provides serialization.
+
+---
+
+## Code Base Reference Snapshots
+
+### 1. `RedisLockStore.java` (Repository Layer)
+```java
+package com.cinema.repository;
+import com.cinema.model.SeatHold;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Repository;
+import org.springframework.web.server.ResponseStatusException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.*;
+
+@Slf4j
+@Repository
+public class RedisLockStore {
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
+    private static final Duration HOLD_TTL = Duration.ofMinutes(2);
+
+    public RedisLockStore(StringRedisTemplate redisTemplate, ObjectMapper objectMapper) {
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
+    }
+
+    public SeatHold acquireHold(String movieId, String seatId, String userId) {
+        String sessionId = UUID.randomUUID().toString();
+        Instant expiryTime = Instant.now().plus(HOLD_TTL);
+        String seatKey = String.format("seat:%s:%s", movieId, seatId);
+        SeatHold hold = new SeatHold(sessionId, movieId, seatId, userId, "held", expiryTime);
+        try {
+            String jsonPayload = objectMapper.writeValueAsString(hold);
+            log.info("[LOCK ATTEMPT] User '{}' trying to acquire lock for seat '{}'", userId, seatId);
+            Boolean lockAcquired = redisTemplate.opsForValue().setIfAbsent(seatKey, jsonPayload, HOLD_TTL);
+            if (lockAcquired == null || !lockAcquired) {
+                log.warn("[LOCK CONFLICT] Distributed lock denied for seat '{}'.", seatId);
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Lock acquisition denied.");
+            }
+            redisTemplate.opsForValue().set("session:" + sessionId, seatKey, HOLD_TTL);
+            log.info("[LOCK ACQUIRED] Distributed lock secured for seat '{}'.", seatId);
+            return hold;
+        } catch (Exception e) {
+            if (e instanceof ResponseStatusException) throw (ResponseStatusException) e;
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Cache processing failure.");
+        }
+    }
+
+    public SeatHold validateAndExtractHold(String sessionId, String userId) {
+        String seatKey = redisTemplate.opsForValue().get("session:" + sessionId);
+        if (seatKey == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Lease time expired.");
+        String rawHoldData = redisTemplate.opsForValue().get(seatKey);
+        if (rawHoldData == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Allocation dropped.");
+        try {
+            SeatHold hold = objectMapper.readValue(rawHoldData, SeatHold.class);
+            if (!hold.getUserId().equals(userId)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "ID mismatch.");
+            return hold;
+        } catch (Exception e) {
+            if (e instanceof ResponseStatusException) throw (ResponseStatusException) e;
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Serialization conflict.");
+        }
+    }
+
+    public void purgeHold(String sessionId) {
+        String seatKey = redisTemplate.opsForValue().get("session:" + sessionId);
+        if (seatKey != null) {
+            redisTemplate.delete(seatKey);
+            redisTemplate.delete("session:" + sessionId);
+        }
+    }
+    // Note: fetchActiveHolds reads using match pattern keys "seat:movieId:*"
+}
+
+```
+
+### 2. `BookingCoordinatorService.java` (Service Orchestration Layer)
+
+```java
+package com.cinema.service;
+import com.cinema.model.BookingEntity;
+import com.cinema.model.SeatHold;
+import com.cinema.repository.PostgresBookingRepository;
+import com.cinema.repository.RedisLockStore;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+import java.time.Instant;
+
+@Slf4j
+@Service
+public class BookingCoordinatorService {
+    private final RedisLockStore redisStore;
+    private final PostgresBookingRepository postgresRepository;
+
+    public BookingCoordinatorService(RedisLockStore redisStore, PostgresBookingRepository postgresRepository) {
+        this.redisStore = redisStore;
+        this.postgresRepository = postgresRepository;
+    }
+
+    @Transactional
+    public BookingEntity finalizeBookingRecord(String sessionId, String userId) {
+        log.info("[CHECKOUT ROUTINE] Finalizing checkout context for session '{}'", sessionId);
+        SeatHold hold = redisStore.validateAndExtractHold(sessionId, userId);
+        
+        log.info("[PROMOTING LOCK] Transitioning cache lock '{}' to permanent DB row", hold.getSeatId());
+        BookingEntity persistentBooking = new BookingEntity();
+        persistentBooking.setId(hold.getId());
+        persistentBooking.setMovieId(hold.getMovieId());
+        persistentBooking.setSeatId(hold.getSeatId());
+        persistentBooking.setUserId(hold.getUserId());
+        persistentBooking.setStatus("CONFIRMED");
+        persistentBooking.setConfirmedAt(Instant.now());
+
+        BookingEntity savedResult = postgresRepository.save(persistentBooking);
+        log.info("[RELATIONAL ROW SAVED] Finalized in Postgres for seat '{}'.", hold.getSeatId());
+        
+        redisStore.purgeHold(sessionId);
+        log.info("[EVICTION COMPLETE] Evicted memory cache keys for seat '{}'.", hold.getSeatId());
+        return savedResult;
+    }
+    // Core structural validation patterns mapped via Lombok @Slf4j log indicators
+}
+
+```
+
+## Current Task Status / Next Upgrade Steps
+
+The system successfully functions and logging tracks the pipeline precisely under `redis-cli monitor`. The next milestones to address are:
+
+1. **Load Testing Execution**: Simulating high-concurrency race condition scenarios (e.g., using JMeter/Locust) to prove performance throughput metrics under load.
+2. **WebSocket/SSE Integration**: Upgrading the frontend communication engine from short polling loops (`500ms`) to persistent full-duplex communication channels to stream reactive state changes instantly.
+3. **DevOps Engineering**: Writing unified Dockerfiles and a root `docker-compose.yml` file to package the React frontend, Spring Boot backend, Redis instance, and PostgreSQL database into a single deployable cluster.
+
+```
+
+```

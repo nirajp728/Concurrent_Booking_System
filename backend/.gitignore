@@ -1,0 +1,93 @@
+# ==========================================
+# 1. Spring Boot & Java Build Outputs
+# ==========================================
+target/
+build/
+out/
+bin/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+*.zip
+*.tar.gz
+*.rar
+Resume_Project_Concurrent_Booking_System.jar
+
+# ==========================================
+# 2. Maven & Gradle Files
+# ==========================================
+.mvn/
+!/.mvn/wrapper/maven-wrapper.jar
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.properties
+.gradle/
+*/.gradle/
+
+# ==========================================
+# 3. PostgreSQL & Redis Local Docker Data
+# ==========================================
+# If you mount Docker volumes to local folders, block them here!
+postgres-data/
+pgdata/
+db-data/
+postgres_data/
+redis-data/
+redis_data/
+dump.rdb
+appendonly.aof
+*.sql.gz
+*.dump
+
+# ==========================================
+# 4. Environment Variables & Secrets
+# ==========================================
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+secrets.yml
+application-secret.properties
+application-secret.yml
+
+# ==========================================
+# 5. IDE Configurations
+# ==========================================
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+.factorypath
+.springBeans
+.sts4-cache/
+
+# ==========================================
+# 6. Logs & Debugging
+# ==========================================
+logs/
+*.log
+*.log.gz
+*.log-*.gz
+hs_err_pid*
+replay_pid*
+
+# ==========================================
+# 7. OS & System Junk
+# ==========================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
